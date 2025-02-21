@@ -1,82 +1,96 @@
 import streamlit as st
 from app import face_rec
-from streamlit_webrtc import webrtc_streamer
-import av
-import time
 import cv2
+import time
 
 # Inicializar en session_state si aún no existe
 if 'data_saved' not in st.session_state:
     st.session_state['data_saved'] = False
 
-#st.set_page_config(page_title='Real Time Prediction')
-#st.set_page_config(page_title='Detección', page_icon=':👤:', layout='wide')
 st.subheader('👤 - Detección')
 
-#Retrive the data from Redis Database
+# Retrieve the data from Redis Database
 with st.spinner('Esperando BD...'):
     redis_face_db = face_rec.retrive_data(name='academy:register')
-    #st.dataframe(redis_face_db)
 
 st.success('Datos cargados desde BD')
 
-#Time
-waitTime = 10 #Time in sec
-setTime = time.time()
-savedTime = 0  # To track when data was saved
-realtimepred = face_rec.RealTimePred() #Real Time Prediction class
+# Create a button to start the camera
+start_camera = st.button("Iniciar Cámara")
+if start_camera:
+    # Initialize camera
+    cam = cv2.VideoCapture(0)
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-#Real Time Prediction
-#Streamlit webrtc
+    # Create placeholder for video
+    frame_placeholder = st.empty()
 
-#Callback function
-def video_frame_callback(frame):
-    global setTime, savedTime
+    # Initialize time variables
+    waitTime = 10  # Time in sec for data save
+    autoStopTime = 12  # Time in sec for auto stop
+    startTime = time.time()  # Initial time for auto stop
+    setTime = time.time()
+    savedTime = 0
+    realtimepred = face_rec.RealTimePred()
 
-    img = frame.to_ndarray(format="bgr24")
-    pred_img = realtimepred.face_prediction(img, redis_face_db,
-                                        'facial_features', ['Name', 'Role'], thresh=0.5)
+    stop_button = st.button("Detener")
 
-    timenow = time.time()
-    difftime = timenow - setTime
-    remaining_time = max(0, waitTime - int(difftime))
+    while not stop_button:
+        ret, frame = cam.read()
+        if ret:
+            # Check if 12 seconds have passed
+            if time.time() - startTime >= autoStopTime:
+                st.warning('Tiempo de detección completado (12 segundos)')
+                cam.release()  # Cerramos la cámara
+                st.info("Cámara cerrada automáticamente")
+                frame_placeholder.empty()  # Limpiamos el placeholder
+                st.stop()  # Detenemos la ejecución de Streamlit
+                break
 
-    # Mostrar contador en el frame
-    cv2.putText(pred_img,
-                f"Tiempo: {remaining_time}s",
-                (10, 30),  # posición (x,y)
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,  # tamaño de fuente
-                (0, 255, 0),  # color BGR (verde)
-                2)  # grosor
+            # Process frame for face recognition
+            pred_img = realtimepred.face_prediction(frame, redis_face_db,
+                                                'facial_features', 
+                                                ['Name', 'Role'], 
+                                                thresh=0.5)
+            
+            # Time management
+            timenow = time.time()
+            difftime = timenow - setTime
+            remaining_time = max(0, waitTime - int(difftime))
+            
+            # Add time counter to frame
+            cv2.putText(pred_img,
+                        f"Tiempo restante: {autoStopTime - int(timenow - startTime)}s",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0, 255, 0),
+                        2)
 
-    if difftime >= waitTime:
-        realtimepred.saveLogs_redis()
-        setTime = time.time()
-        savedTime = time.time()  # Record when data was saved
-        print('Save Data to redis database')
-        st.session_state['data_saved'] = True
+            if difftime >= waitTime:
+                realtimepred.saveLogs_redis()
+                setTime = time.time()
+                savedTime = time.time()
+                st.success('Datos registrados en la BD correctamente.')
 
-    # Mostrar mensaje de guardado por 2 segundos
-    if time.time() - savedTime < 3:  # If less than 2 seconds have passed since saving
-        cv2.putText(pred_img,
-                    "Datos guardados!",
-                    (int(pred_img.shape[1]/4), int(pred_img.shape[0]/2)),  # centro de la imagen
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),  # verde
-                     2)
+            # Show saving message
+            if time.time() - savedTime < 3:
+                cv2.putText(pred_img,
+                            "Datos guardados!",
+                            (int(pred_img.shape[1]/4), int(pred_img.shape[0]/2)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            1,
+                            (0, 255, 0),
+                            2)
 
-    return av.VideoFrame.from_ndarray(pred_img, format="bgr24")
+            # Convert BGR to RGB for Streamlit
+            pred_img = cv2.cvtColor(pred_img, cv2.COLOR_BGR2RGB)
+            # Display the frame
+            frame_placeholder.image(pred_img)
 
-
-webrtc_streamer(key="realtimePredictions", video_frame_callback=video_frame_callback,
-                rtc_configuration={
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-    }
-                )
-
-
-# Mostrar mensaje si los datos fueron guardados
-if st.session_state['data_saved']:
-    st.success('Datos registrados en la BD correctamente.')
+    # Release camera when stopped
+    cam.release()
+    st.info("Cámara detenida")
+else:
+    st.info("Presione 'Iniciar Cámara' para comenzar la detección facial")
