@@ -1,9 +1,8 @@
 numpy
 pandas
 redis
-opencv-python
+opencv-python-headless==4.8.1.78
 scikit-learn
 streamlit
 insightface
 onnxruntime
-opencv-python-headless
